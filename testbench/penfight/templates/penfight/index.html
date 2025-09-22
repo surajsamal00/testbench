@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pen Fight Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            border: 4px solid #333;
+            border-radius: 10px;
+            background: #f0f0f0;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        
+        #gameCanvas {
+            display: block;
+            border-radius: 6px;
+            cursor: crosshair;
+        }
+        
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            border-radius: 6px;
+        }
+        
+        #gameOverContent {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        
+        #gameOverContent h2 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        #gameOverContent p {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.2em;
+        }
+        
+        .button {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            margin: 0 10px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        #turnIndicator {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        
+        #instructions {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 0.9em;
+            max-width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="turnIndicator">Player 1's Turn</div>
+        <div id="instructions">
+            Click and drag from your pen to flick it. Knock your opponent off the table to win!
+        </div>
+        <div id="gameOverScreen">
+            <div id="gameOverContent">
+                <h2>Game Over</h2>
+                <p id="winnerText">Player 1 Wins!</p>
+                <button class="button" onclick="restartGame()">Restart</button>
+                <button class="button" onclick="quitGame()">Quit</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const winnerText = document.getElementById('winnerText');
+        const turnIndicator = document.getElementById('turnIndicator');
+
+
+        // Game state
+        let gameState = {
+            currentPlayer: 1,
+            gameOver: false,
+            winner: null,
+            firstShot: [true, true], // Track first shot for each player
+            isDragging: false,
+            dragStart: null,
+            dragEnd: null
+        };
+
+
+        // Physics constants
+        const FRICTION = 0.98;
+        const ANGULAR_FRICTION = 0.95;
+        const MAX_VELOCITY = 15;
+        const COLLISION_DAMPING = 0.8;
+
+
+        class Pen {
+            constructor(x, y, color, player) {
+                this.x = x;
+                this.y = y;
+                this.width = 80;
+                this.height = 12;
+                this.angle = 0;
+                this.vx = 0;
+                this.vy = 0;
+                this.angularVelocity = 0;
+                this.color = color;
+                this.player = player;
+                this.mass = 1;
+            }
+
+
+            update() {
+                // Apply friction
+                this.vx *= FRICTION;
+                this.vy *= FRICTION;
+                this.angularVelocity *= ANGULAR_FRICTION;
+
+
+                // Update position
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += this.angularVelocity;
+
+
+                // Stop very small movements
+                if (Math.abs(this.vx) < 0.01) this.vx = 0;
+                if (Math.abs(this.vy) < 0.01) this.vy = 0;
+                if (Math.abs(this.angularVelocity) < 0.001) this.angularVelocity = 0;
+            }
+
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                
+                // Draw pen body
+                ctx.fillStyle = this.color;
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                // Draw pen tip
+                ctx.fillStyle = '#333';
+                ctx.fillRect(this.width/2 - 5, -this.height/2, 5, this.height);
+                
+                // Draw pen details
+                ctx.fillStyle = 'white';
+                ctx.fillRect(-this.width/2 + 10, -2, 20, 4);
+                
+                ctx.restore();
+            }
+
+
+            getCorners() {
+                const cos = Math.cos(this.angle);
+                const sin = Math.sin(this.angle);
+                const hw = this.width / 2;
+                const hh = this.height / 2;
+
+
+                return [
+                    {
+                        x: this.x + (-hw * cos - -hh * sin),
+                        y: this.y + (-hw * sin + -hh * cos)
+                    },
+                    {
+                        x: this.x + (hw * cos - -hh * sin),
+                        y: this.y + (hw * sin + -hh * cos)
+                    },
+                    {
+                        x: this.x + (hw * cos - hh * sin),
+                        y: this.y + (hw * sin + hh * cos)
+                    },
+                    {
+                        x: this.x + (-hw * cos - hh * sin),
+                        y: this.y + (-hw * sin + hh * cos)
+                    }
+                ];
+            }
+
+
+            isOutOfBounds() {
+                const corners = this.getCorners();
+                let outsideCount = 0;
+
+
+                corners.forEach(corner => {
+                    if (corner.x < 0 || corner.x > canvas.width || 
+                        corner.y < 0 || corner.y > canvas.height) {
+                        outsideCount++;
+                    }
+                });
+
+
+                return outsideCount > 2; // More than 50% outside
+            }
+
+
+            applyForce(fx, fy, pointX, pointY) {
+                // Apply linear force
+                this.vx += fx / this.mass;
+                this.vy += fy / this.mass;
+
+
+                // Apply torque
+                const dx = pointX - this.x;
+                const dy = pointY - this.y;
+                const torque = dx * fy - dy * fx;
+                this.angularVelocity += torque / (this.mass * 1000);
+
+
+                // Limit velocity
+                const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                if (speed > MAX_VELOCITY) {
+                    this.vx = (this.vx / speed) * MAX_VELOCITY;
+                    this.vy = (this.vy / speed) * MAX_VELOCITY;
+                }
+            }
+
+
+            getBounds() {
+                const corners = this.getCorners();
+                let minX = corners[0].x, maxX = corners[0].x;
+                let minY = corners[0].y, maxY = corners[0].y;
+
+
+                corners.forEach(corner => {
+                    minX = Math.min(minX, corner.x);
+                    maxX = Math.max(maxX, corner.x);
+                    minY = Math.min(minY, corner.y);
+                    maxY = Math.max(maxY, corner.y);
+                });
+
+
+                return { minX, maxX, minY, maxY };
+            }
+        }
+
+
+        // Create pens
+        const pen1 = new Pen(150, canvas.height / 2, '#e74c3c', 1);
+        const pen2 = new Pen(canvas.width - 150, canvas.height / 2, '#3498db', 2);
+
+
+        function checkCollision(pen1, pen2) {
+            const bounds1 = pen1.getBounds();
+            const bounds2 = pen2.getBounds();
+
+
+            return !(bounds1.maxX < bounds2.minX || 
+                     bounds1.minX > bounds2.maxX || 
+                     bounds1.maxY < bounds2.minY || 
+                     bounds1.minY > bounds2.maxY);
+        }
+
+
+        function resolveCollision(pen1, pen2) {
+            // Simple elastic collision
+            const dx = pen2.x - pen1.x;
+            const dy = pen2.y - pen1.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+
+            if (distance === 0) return;
+
+
+            const nx = dx / distance;
+            const ny = dy / distance;
+
+
+            // Relative velocity
+            const dvx = pen2.vx - pen1.vx;
+            const dvy = pen2.vy - pen1.vy;
+
+
+            // Relative velocity in collision normal direction
+            const dvn = dvx * nx + dvy * ny;
+
+
+            // Don't resolve if objects are separating
+            if (dvn > 0) return;
+
+
+            // Collision impulse
+            const impulse = 2 * dvn / (pen1.mass + pen2.mass) * COLLISION_DAMPING;
+
+
+            // Update velocities
+            pen1.vx += impulse * pen2.mass * nx;
+            pen1.vy += impulse * pen2.mass * ny;
+            pen2.vx -= impulse * pen1.mass * nx;
+            pen2.vy -= impulse * pen1.mass * ny;
+
+
+            // Add some angular velocity from collision
+            pen1.angularVelocity += (Math.random() - 0.5) * 0.1;
+            pen2.angularVelocity += (Math.random() - 0.5) * 0.1;
+
+
+            // Separate pens to prevent overlap
+            const overlap = (pen1.width + pen2.width) / 2 - distance;
+            if (overlap > 0) {
+                const separationX = nx * overlap * 0.5;
+                const separationY = ny * overlap * 0.5;
+                pen1.x -= separationX;
+                pen1.y -= separationY;
+                pen2.x += separationX;
+                pen2.y += separationY;
+            }
+        }
+
+
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+
+
+        function isPointInPen(x, y, pen) {
+            const dx = x - pen.x;
+            const dy = y - pen.y;
+            const cos = Math.cos(-pen.angle);
+            const sin = Math.sin(-pen.angle);
+            
+            const localX = dx * cos - dy * sin;
+            const localY = dx * sin + dy * cos;
+            
+            return Math.abs(localX) <= pen.width/2 && Math.abs(localY) <= pen.height/2;
+        }
+
+
+        function getCurrentPlayerPen() {
+            return gameState.currentPlayer === 1 ? pen1 : pen2;
+        }
+
+
+        function bothPensStopped() {
+            return (Math.abs(pen1.vx) < 0.01 && Math.abs(pen1.vy) < 0.01 && 
+                    Math.abs(pen1.angularVelocity) < 0.001 &&
+                    Math.abs(pen2.vx) < 0.01 && Math.abs(pen2.vy) < 0.01 && 
+                    Math.abs(pen2.angularVelocity) < 0.001);
+        }
+
+
+        // Mouse event handlers
+        canvas.addEventListener('mousedown', (e) => {
+            if (gameState.gameOver || !bothPensStopped()) return;
+
+
+            const mouse = getMousePos(e);
+            const currentPen = getCurrentPlayerPen();
+
+
+            if (isPointInPen(mouse.x, mouse.y, currentPen)) {
+                gameState.isDragging = true;
+                gameState.dragStart = { x: mouse.x, y: mouse.y };
+            }
+        });
+
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!gameState.isDragging) return;
+
+
+            const mouse = getMousePos(e);
+            gameState.dragEnd = { x: mouse.x, y: mouse.y };
+        });
+
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (!gameState.isDragging || gameState.gameOver) return;
+
+
+            const currentPen = getCurrentPlayerPen();
+            const mouse = getMousePos(e);
+
+
+            if (gameState.dragStart) {
+                let fx = (gameState.dragStart.x - mouse.x) * 0.3;
+                let fy = (gameState.dragStart.y - mouse.y) * 0.3;
+
+
+                // Halve force on first shot
+                if (gameState.firstShot[gameState.currentPlayer - 1]) {
+                    fx *= 0.5;
+                    fy *= 0.5;
+                    gameState.firstShot[gameState.currentPlayer - 1] = false;
+                }
+
+
+                currentPen.applyForce(fx, fy, gameState.dragStart.x, gameState.dragStart.y);
+
+
+                // Switch turns
+                gameState.currentPlayer = gameState.currentPlayer === 1 ? 2 : 1;
+                turnIndicator.textContent = `Player ${gameState.currentPlayer}'s Turn`;
+            }
+
+
+            gameState.isDragging = false;
+            gameState.dragStart = null;
+            gameState.dragEnd = null;
+        });
+
+
+        function checkGameOver() {
+            if (pen1.isOutOfBounds()) {
+                gameState.gameOver = true;
+                gameState.winner = 2;
+            } else if (pen2.isOutOfBounds()) {
+                gameState.gameOver = true;
+                gameState.winner = 1;
+            }
+
+
+            if (gameState.gameOver) {
+                winnerText.textContent = `Player ${gameState.winner} Wins!`;
+                gameOverScreen.style.display = 'flex';
+            }
+        }
+
+
+        function drawTrajectoryLine() {
+            if (gameState.isDragging && gameState.dragStart && gameState.dragEnd) {
+                ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([5, 5]);
+
+                // Draw the line from drag end → drag start (shows flick direction)
+                ctx.beginPath();
+                ctx.moveTo(gameState.dragEnd.x, gameState.dragEnd.y);
+                ctx.lineTo(gameState.dragStart.x, gameState.dragStart.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                // Draw arrowhead at drag start (pen position)
+                const angle = Math.atan2(gameState.dragStart.y - gameState.dragEnd.y,
+                                        gameState.dragStart.x - gameState.dragEnd.x);
+                const arrowLength = 15;
+
+                ctx.beginPath();
+                ctx.moveTo(gameState.dragStart.x, gameState.dragStart.y);
+                ctx.lineTo(gameState.dragStart.x - arrowLength * Math.cos(angle - Math.PI/6),
+                        gameState.dragStart.y - arrowLength * Math.sin(angle - Math.PI/6));
+                ctx.moveTo(gameState.dragStart.x, gameState.dragStart.y);
+                ctx.lineTo(gameState.dragStart.x - arrowLength * Math.cos(angle + Math.PI/6),
+                        gameState.dragStart.y - arrowLength * Math.sin(angle + Math.PI/6));
+                ctx.stroke();
+            }
+        }
+
+
+
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+
+            // Update physics
+            if (!gameState.gameOver) {
+                pen1.update();
+                pen2.update();
+
+
+                // Check collision
+                if (checkCollision(pen1, pen2)) {
+                    resolveCollision(pen1, pen2);
+                }
+
+
+                // Check win condition
+                checkGameOver();
+            }
+
+
+            // Draw everything
+            pen1.draw();
+            pen2.draw();
+            drawTrajectoryLine();
+
+
+            // Update turn indicator visibility
+            if (bothPensStopped() && !gameState.gameOver) {
+                turnIndicator.style.opacity = '1';
+                canvas.style.cursor = 'crosshair';
+            } else {
+                turnIndicator.style.opacity = '0.5';
+                canvas.style.cursor = 'wait';
+            }
+
+
+            requestAnimationFrame(gameLoop);
+        }
+
+
+        function restartGame() {
+            // Reset game state
+            gameState.currentPlayer = 1;
+            gameState.gameOver = false;
+            gameState.winner = null;
+            gameState.firstShot = [true, true];
+            gameState.isDragging = false;
+            gameState.dragStart = null;
+            gameState.dragEnd = null;
+
+
+            // Reset pens
+            pen1.x = 150;
+            pen1.y = canvas.height / 2;
+            pen1.angle = 0;
+            pen1.vx = 0;
+            pen1.vy = 0;
+            pen1.angularVelocity = 0;
+
+
+            pen2.x = canvas.width - 150;
+            pen2.y = canvas.height / 2;
+            pen2.angle = 0;
+            pen2.vx = 0;
+            pen2.vy = 0;
+            pen2.angularVelocity = 0;
+
+
+            // Hide game over screen
+            gameOverScreen.style.display = 'none';
+            turnIndicator.textContent = "Player 1's Turn";
+        }
+
+
+        function quitGame() {
+            // Replace game container content with a static message
+            const gameContainer = document.getElementById('gameContainer');
+            gameContainer.innerHTML = `
+                <div style="
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100%;
+                    flex-direction: column;
+                    font-family: Arial, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                ">
+                    <h1>Thank You for Playing!</h1>
+                    <p>Come back soon for another match!</p>
+                </div>
+            `;
+        }
+
+
+
+        // Start the game
+        gameLoop();
+    </script>
+</body>
+</html>
